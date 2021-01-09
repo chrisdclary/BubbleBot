@@ -19,6 +19,7 @@ const bot = new Eris(auth.token);
 //	Flag for debug mode. Use .debug to toggle
 var debug = 1;
 
+var busyList = [];
 /*************************
  *	Queue construct to serve as a buffer for multiple 
  *		incoming commands
@@ -73,6 +74,9 @@ bot.on("ready", () => {
  *		to the command buffer
  *************************/
 bot.on("messageCreate", async msg =>{
+	
+	// For fun stuff
+	var lowercasemsg = msg.content.toLowerCase();
 
 	if(msg.content.substring(0,1) == '.'){
 
@@ -158,7 +162,10 @@ bot.on("messageCreate", async msg =>{
 				break;
 		}
 		
-	} 
+	}
+	 else if (lowercasemsg.includes("save")&&lowercasemsg.includes("day")){
+		saveTheDay(msg, msg.channel.id, msg.member);
+	}
 });
 
 /*************************
@@ -167,19 +174,36 @@ bot.on("messageCreate", async msg =>{
 async function executeCommands(){
 	if(commandBuf.size != 0){ // Only execute a command if the buffer isn't empty
 		let current = commandBuf.head;
-	
-		switch(current.command) {
-			case 'play':
-				play(current.channel.id);
-				commandBuf.pop();
-				break;
-			case 'rps':
-				doJanken(current.channel, current.member, current.member.username);
-				commandBuf.pop();
-				break;
+
+		if(debug){
+			console.log("current: ");
+			console.log(current.channel.id);
+			console.log("Busy List");
+			console.log(busyList);
+		} 
+
+		if(busyList.includes(current.channel.id)){ //	If channel is busy, ignore command
+			console.log("Ignoring command");
+			commandBuf.pop();
 		}
+		else{
+			switch(current.command) {
+				case 'play':
+					play(current.channel.id);
+					commandBuf.pop();
+					break;
+				case 'rps':
+					busyList.push(current.channel.id);
+					doJanken(current.channel, current.member, current.member.username);
+					if(debug) console.log("popping.");
+					commandBuf.pop();
+					break;
+				
+			}
+		}
+		
+		
 	}
-	
 }
 
 //	Serves as a hub for all games
@@ -190,6 +214,28 @@ async function play(channelID){
 	botmsg.addReaction("🃏");
 }
 
+//	Ktrue saves the day
+async function saveTheDay(msg, channelID, member){
+
+	var voiceChannel = member.voiceState.channelID;
+	if(debug) console.log(voiceChannel);
+
+	if(voiceChannel != null){
+		bot.createMessage(channelID, 'Calling Ktrue...');
+		var connection = await bot.joinVoiceChannel(voiceChannel);
+		connection.play('ktrue.mp3');
+		connection.on('end', () => {
+			bot.leaveVoiceChannel(voiceChannel);
+			bot.createMessage(channelID, 'The day has been saved.');
+		});
+	} else {
+		msg.addReaction('🇰');
+		msg.addReaction('🇹');
+		msg.addReaction('🇷');
+		msg.addReaction('🇺');
+		msg.addReaction('🇪');
+	}
+}
 
 //	Plays rock, paper, scissors
 async function doJanken(channel, member){
@@ -247,6 +293,9 @@ async function doJanken(channel, member){
 			bot.deleteMessages(channel.id, mess); 
 			mess = [];
 		}, 15000);
+
+		let pos = busyList.indexOf(channel.id);
+		busyList.splice(pos, 1);
 
 	}, 6500);
 
