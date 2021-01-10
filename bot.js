@@ -14,55 +14,20 @@
 //	Dependencies, etc.
 var auth = require('./auth.json');
 var Eris = require('eris');
+const { Queue } = require("./Queue");
 const bot = new Eris(auth.token);
 const sqlite3 = require('sqlite3').verbose();
 
-let db = openDB();
+//	Open database connection
+let db = new sqlite3.Database('./db/users.db', (err) => {
+	if(err) console.log(err.message); 
+});
 
 //	Flag for debug mode. Use .debug to toggle
 var debug = 1;
 
 //	Keeps track of busy channels
 var busyList = [];
-
-/*************************
- *	Queue construct to serve as a buffer for multiple 
- *		incoming commands
- *************************/ 
-class Queue {
-	constructor() {
-		this.size = 0;
-		this.head = null;
-		this.tail = null;
-	}
-	append(node) { //	Add node to end of queue
-		if(this.size == 0) {
-			this.head = node;
-			this.tail = node;
-		} else {
-			this.tail.next = node;
-			this.tail = node;
-		}
-		this.size++;
-	}
-	pop() { //	Remove head node and return it
-		if(this.size == 0){
-			// Do nothing
-		} else {
-			this.head = this.head.next;
-			this.size -= 1;
-			if(this.size == 0){
-				this.tail = null;
-			}
-		}
-		return this;
-	}
-	clear() { //	Clear all nodes from queue
-		this.size = 0;
-		this.head = null;
-		this.tail = null;
-	}
-}
 
 //	Initialize command buffer
 const commandBuf = new Queue();
@@ -88,14 +53,21 @@ bot.on("messageCreate", async msg =>{
 			//	create user table if it doesn't exist
 			db.run(`CREATE TABLE IF NOT EXISTS 
 						users (userID TEXT PRIMARY KEY, wins INT, losses INT, rock INT, paper INT, scissors INT, cash INT)`, function (err){
-				if(err) console.log("error making table: "+err.message); 
-				else console.log(db);
+				if(err){
+					if(debug) console.log("error making table: "+err.message); 
+				} 
+
 			});	
 
 			//	add row for the user if it doesn't already exist
 			db.run(`INSERT INTO users VALUES('`+msg.author.id+`', 0, 0, 0, 0, 0, 0)`, function (err){
-				if(err) console.log("error adding row: "+err.message); 
-				else console.log(`A row has been inserted with rowid ${this.lastID}`);
+				if(err){
+					//	Do nothing, user is probably already in the table
+					if(debug) console.log("Error adding row: "+err.message);
+				}
+				else {
+					if (debug) console.log(`A row has been inserted with rowid ${this.lastID}`);
+				}
 			});
 		});
 		
@@ -259,6 +231,42 @@ async function saveTheDay(msg, channelID, member){
 //	Plays rock, paper, scissors
 async function doJanken(channel, member){
 
+	/******************************
+	 * 
+	 * 	Value modifiers -
+	 * 	Analyze the player's tendencies towards rock/paper/scissors
+	 * 		and prefer gesture that beats their tendency
+	 * 
+	 ******************************/
+	var gestureCounts = [];
+
+	db.serialize(() => {
+		//	
+		db.get(`SELECT rock roc, paper pap, scissors sci FROM users WHERE userID = '`+member.user.id+`'`, (err, row) => {
+			if(err) console.log("error querying table: "+err.message); 
+			else{
+				let total = 0;
+				gestureCounts.push(row.roc);
+				total += row.roc;
+				gestureCounts.push(row.pap);
+				total += row.pap;
+				gestureCounts.push(row.sci);
+				total += row.sci;
+				let choice = chooseGesture(gestureCounts, total);
+				runJanken(choice, channel, member);
+			} 			
+		});			
+	});
+}
+
+/*
+ *
+ *	Start Janken Helper functions
+ * 
+ */
+
+async function runJanken(choice, channel, member) {
+
 	//	Array for handling the mess
 	var mess = [];
 
@@ -268,17 +276,6 @@ async function doJanken(channel, member){
 
 	mess.push(target.id);
 
-	//	Randomly assign values to rock, paper, and scissors
-	let choice = "";
-	let rock = Math.floor(Math.random() * Math.floor(10000));
-	let paper = Math.floor(Math.random() * Math.floor(10000));
-	let scissors = Math.floor(Math.random() * Math.floor(10000));
-
-	//	Choose the move that got the highest value
-	let max = Math.max(rock, paper, scissors);
-	if(max == rock) choice = 'Rock';
-	else if (max == paper) choice = 'Paper';
-	else choice = 'Scissors';
 
 	var temp = '';
 
@@ -294,22 +291,20 @@ async function doJanken(channel, member){
 		//	Return the results of the match
 		if(result == 0){
 			db.serialize(() => {
-				//	create user table if it doesn't exist
+				//	Update player row with new win/loss
 				db.run(`UPDATE users SET wins = wins + 1 WHERE userID = '`+member.user.id+`'`, function (err){
 					if(err) console.log("error updating table: "+err.message); 
-					else console.log(db);
 				});	
 			});
-			bot.createMessage(channel.id, "Nice job.");
+			await bot.createMessage(channel.id, "Nice job.");
 			if(debug) console.log(member.username+" beat the bot.");
 		} 
 
 		else if(result == 1){
 			db.serialize(() => {
-				//	create user table if it doesn't exist
+				//	Update player row with new win/loss
 				db.run(`UPDATE users SET losses = losses + 1 WHERE userID = '`+member.user.id+`'`, function (err){
 					if(err) console.log("error updating table: "+err.message); 
-					else console.log(db);
 				});	
 			});
 			bot.createMessage(channel.id, "I won! Better luck next time.");
@@ -327,10 +322,13 @@ async function doJanken(channel, member){
 		}
 
 		db.serialize(() => {
-			//	create user table if it doesn't exist
+			//	Show player their winrate
 			db.get(`SELECT wins win, losses loss FROM users WHERE userID = '`+member.user.id+`'`, (err, row) => {
-				if(err) console.log("error querying table: "+err.message); 
-				else console.log("wins: "+row.win +" losses: "+row.loss);
+				if(err){
+					if(debug) console.log("error querying table: "+err.message); 
+				} 
+				else 
+					bot.createMessage(channel.id, "Your wins/losses: "+row.win +"/"+row.loss);
 			});	
 		});
 
@@ -344,8 +342,24 @@ async function doJanken(channel, member){
 		let pos = busyList.indexOf(channel.id);
 		busyList.splice(pos, 1);
 
-	}, 6500);
+	}, 6500);		
+}
 
+function chooseGesture(values, total){
+
+	let rockMod = 5*(values[2]/total);
+	let papMod = 5*(values[0]/total);
+	let scisMod = 5*(values[1]/total);
+
+	let rock = 1+rockMod*(Math.floor(Math.random() * Math.floor(10000)));
+	let paper = 1+papMod*(Math.floor(Math.random() * Math.floor(10000)));
+	let scissors = 1+scisMod*(Math.floor(Math.random() * Math.floor(10000)));
+
+	//	Choose the move that got the highest value
+	let max = Math.max(rock, paper, scissors);
+	if(max == rock) return 'Rock';
+	else if (max == paper) return 'Paper';
+	else return 'Scissors';
 }
 
 
@@ -383,6 +397,28 @@ async function evaluateJanken(channel, member, target, choice){
 		bot.createMessage(channel.id, "What's that supposed to be?");
 		return 3; //	Return No Contest
 	}
+
+	//	Player's valid gesture will be added to the database
+	db.serialize(() => {
+		if(playerGesture == 1){
+			//	Player throws rock, increment rock count
+			db.run(`UPDATE users SET rock = rock + 1 WHERE userID = '`+member.user.id+`'`, function (err){
+				if(err) console.log("error updating table: "+err.message); 
+			});	
+		}
+		else if(playerGesture == 2){
+			//	Player throws paper, increment paper count
+			db.run(`UPDATE users SET paper = paper + 1 WHERE userID = '`+member.user.id+`'`, function (err){
+				if(err) console.log("error updating table: "+err.message); 
+			});	
+		}
+		else{
+			//	Player throws scissors, increment scissors count
+			db.run(`UPDATE users SET scissors = scissors + 1 WHERE userID = '`+member.user.id+`'`, function (err){
+				if(err) console.log("error updating table: "+err.message); 
+			});	
+		}
+	});
 
 	//	Player made a valid gesture -> see who won
 	return whoWon(convertJanken(choice), playerGesture); 
@@ -453,14 +489,5 @@ function whoWon(bot, player){
 	}
 	
 }
-
-// Opens database for read/write
-function openDB(){
-	let db = new sqlite3.Database('./db/users.db', (err) => {
-		if(err) console.log(err.message); 
-	});
-	return db;
-}
-
 
 bot.connect();
