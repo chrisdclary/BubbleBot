@@ -1,6 +1,6 @@
 ****************************
 *
-*	BubbleBot v1.0
+*	BubbleBot v1.1
 *
 * By Chris Clary
 * 

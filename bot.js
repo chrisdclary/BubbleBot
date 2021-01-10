@@ -15,11 +15,16 @@
 var auth = require('./auth.json');
 var Eris = require('eris');
 const bot = new Eris(auth.token);
+const sqlite3 = require('sqlite3').verbose();
+
+let db = openDB();
 
 //	Flag for debug mode. Use .debug to toggle
 var debug = 1;
 
+//	Keeps track of busy channels
 var busyList = [];
+
 /*************************
  *	Queue construct to serve as a buffer for multiple 
  *		incoming commands
@@ -30,7 +35,7 @@ class Queue {
 		this.head = null;
 		this.tail = null;
 	}
-	push(node) {
+	append(node) { //	Add node to end of queue
 		if(this.size == 0) {
 			this.head = node;
 			this.tail = node;
@@ -40,7 +45,7 @@ class Queue {
 		}
 		this.size++;
 	}
-	pop() {
+	pop() { //	Remove head node and return it
 		if(this.size == 0){
 			// Do nothing
 		} else {
@@ -52,7 +57,7 @@ class Queue {
 		}
 		return this;
 	}
-	clear() { 
+	clear() { //	Clear all nodes from queue
 		this.size = 0;
 		this.head = null;
 		this.tail = null;
@@ -74,11 +79,26 @@ bot.on("ready", () => {
  *		to the command buffer
  *************************/
 bot.on("messageCreate", async msg =>{
-	
-	// For fun stuff
+
 	var lowercasemsg = msg.content.toLowerCase();
 
-	if(msg.content.substring(0,1) == '.'){
+	if(msg.content.substring(0,1) == '.' && msg.member.id != bot.user.id){
+
+		db.serialize(() => {
+			//	create user table if it doesn't exist
+			db.run(`CREATE TABLE IF NOT EXISTS 
+						users (userID TEXT PRIMARY KEY, wins INT, losses INT, rock INT, paper INT, scissors INT, cash INT)`, function (err){
+				if(err) console.log("error making table: "+err.message); 
+				else console.log(db);
+			});	
+
+			//	add row for the user if it doesn't already exist
+			db.run(`INSERT INTO users VALUES('`+msg.author.id+`', 0, 0, 0, 0, 0, 0)`, function (err){
+				if(err) console.log("error adding row: "+err.message); 
+				else console.log(`A row has been inserted with rowid ${this.lastID}`);
+			});
+		});
+		
 
 		//	Parse command
 		var args = msg.content.substring(1).split(' ');
@@ -125,7 +145,7 @@ bot.on("messageCreate", async msg =>{
 			case 'cmdPop':
 				commandBuf.pop();
 				if(debug){
-					console.log('\nCommand Popped:');
+					console.log('Command Popped:');
 					console.log(commandBuf);
 				}
 				break;
@@ -134,7 +154,7 @@ bot.on("messageCreate", async msg =>{
 			case 'cmdClear':
 				commandBuf.clear();
 				if(debug){
-					console.log('\nCommand Cleared:');
+					console.log('Command Cleared:');
 					console.log(commandBuf);
 				}
 				break;
@@ -150,22 +170,23 @@ bot.on("messageCreate", async msg =>{
 			 *	Add valid commands to the command queue
 			 *************************/
 			case 'play':
-				commandBuf.push(commandNode);
+				commandBuf.append(commandNode);
 				break;
 			
 			case 'rps':
-				commandBuf.push(commandNode);
+				commandBuf.append(commandNode);
 				break;
 
 			default:
 				await bot.createMessage(textChannel, 'Hello there.');
 				break;
 		}
-		
+
 	}
 	 else if (lowercasemsg.includes("save")&&lowercasemsg.includes("day")){
 		saveTheDay(msg, msg.channel.id, msg.member);
 	}
+	
 });
 
 /*************************
@@ -175,6 +196,7 @@ async function executeCommands(){
 	if(commandBuf.size != 0){ // Only execute a command if the buffer isn't empty
 		let current = commandBuf.head;
 
+		//	Some debug info
 		if(debug){
 			console.log("current: ");
 			console.log(current.channel.id);
@@ -183,7 +205,7 @@ async function executeCommands(){
 		} 
 
 		if(busyList.includes(current.channel.id)){ //	If channel is busy, ignore command
-			console.log("Ignoring command");
+			if(debug) console.log("Ignoring command");
 			commandBuf.pop();
 		}
 		else{
@@ -198,11 +220,8 @@ async function executeCommands(){
 					if(debug) console.log("popping.");
 					commandBuf.pop();
 					break;
-				
 			}
-		}
-		
-		
+		}	
 	}
 }
 
@@ -274,18 +293,46 @@ async function doJanken(channel, member){
 
 		//	Return the results of the match
 		if(result == 0){
+			db.serialize(() => {
+				//	create user table if it doesn't exist
+				db.run(`UPDATE users SET wins = wins + 1 WHERE userID = '`+member.user.id+`'`, function (err){
+					if(err) console.log("error updating table: "+err.message); 
+					else console.log(db);
+				});	
+			});
 			bot.createMessage(channel.id, "Nice job.");
 			if(debug) console.log(member.username+" beat the bot.");
-		} else if(result == 1){
+		} 
+
+		else if(result == 1){
+			db.serialize(() => {
+				//	create user table if it doesn't exist
+				db.run(`UPDATE users SET losses = losses + 1 WHERE userID = '`+member.user.id+`'`, function (err){
+					if(err) console.log("error updating table: "+err.message); 
+					else console.log(db);
+				});	
+			});
 			bot.createMessage(channel.id, "I won! Better luck next time.");
 			if(debug) console.log("The bot beat "+member.username);
-		} else if(result == 2){
+		} 
+
+		else if(result == 2){
 			bot.createMessage(channel.id, "So it's a tie, huh. Lame.");
 			if(debug) console.log("There was a tie between the bot and "+member.username);
-		} else if(result == 3){
+		} 
+
+		else if(result == 3){
 			//	Don't do anything if they messed up
 			if(debug) console.log(member.username+" did something wrong.");
 		}
+
+		db.serialize(() => {
+			//	create user table if it doesn't exist
+			db.get(`SELECT wins win, losses loss FROM users WHERE userID = '`+member.user.id+`'`, (err, row) => {
+				if(err) console.log("error querying table: "+err.message); 
+				else console.log("wins: "+row.win +" losses: "+row.loss);
+			});	
+		});
 
 		//	Once command has finished, clean up the mess
 		setTimeout(() => {
@@ -407,6 +454,13 @@ function whoWon(bot, player){
 	
 }
 
+// Opens database for read/write
+function openDB(){
+	let db = new sqlite3.Database('./db/users.db', (err) => {
+		if(err) console.log(err.message); 
+	});
+	return db;
+}
 
 
 bot.connect();
