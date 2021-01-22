@@ -11,11 +11,8 @@ You can use this code if you want, you will just have to write
 your own auth.json with your Discord OAuth token, and probably
 remove or repurpose the ktrue stuff
 
-You can use this code if you want, just be sure to credit me 
-somehow unless you make large alterations, and you will just 
-have to write your own auth.json with your Discord OAuth token. 
-Also you'd probably want to remove or repurpose the ktrue stuff, 
-it's just an inside joke.
+You can use this code if you want, it can make a decent starting
+point if you are trying to write your own bot.
 
 The command character is '.'
 All it can do right now is play rock, paper, scissors using '.rps'
